@@ -6708,29 +6708,58 @@ testView windowWidth instructions testView_ =
                 ]
 
             else
-                testOverlay windowWidth testView_ currentStep
-                    :: (case currentTimeline testView_ of
-                            FrontendTimeline clientId ->
-                                case Maybe.andThen (\a -> Array.get a testView_.steps) currentAndPreviousStep.currentStep of
-                                    Just currentStep2 ->
-                                        case SeqDict.get clientId currentStep2.frontends of
-                                            Just frontend ->
-                                                let
-                                                    state : State toBackend frontendMsg frontendModel toFrontend backendMsg backendModel
-                                                    state =
-                                                        getState instructions
-                                                in
-                                                state.frontendApp.view frontend.model |> .body |> List.map (Html.map (\_ -> NoOp))
+                let
+                    client1Id = Effect.Lamdera.clientIdFromString "clientId 0"
+                    client2Id = Effect.Lamdera.clientIdFromString "clientId 1"
 
-                                            Nothing ->
-                                                []
+                    renderClient : ClientId -> String -> List (Html (Msg toBackend frontendMsg frontendModel toFrontend backendMsg backendModel))
+                    renderClient clientId label =
+                        case Maybe.andThen (\a -> Array.get a testView_.steps) currentAndPreviousStep.currentStep of
+                            Just currentStep2 ->
+                                case SeqDict.get clientId currentStep2.frontends of
+                                    Just frontend ->
+                                        let
+                                            state : State toBackend frontendMsg frontendModel toFrontend backendMsg backendModel
+                                            state =
+                                                getState instructions
+                                        in
+                                        state.frontendApp.view frontend.model |> .body |> List.map (Html.map (\_ -> NoOp))
 
                                     Nothing ->
-                                        [ centeredText "Frontend not connected" ]
+                                        [ centeredText (label ++ " not connected") ]
 
-                            BackendTimeline ->
-                                [ centeredText "There is no view to display for the backend" ]
-                       )
+                            Nothing ->
+                                [ centeredText (label ++ " not connected") ]
+                in
+                testOverlay windowWidth testView_ currentStep
+                    :: [ Html.div
+                            [ Html.Attributes.style "display" "flex"
+                            , Html.Attributes.style "justify-content" "center"
+                            , Html.Attributes.style "gap" "20px"
+                            , Html.Attributes.style "padding" "20px"
+                            , Html.Attributes.style "background-color" "#f0f0f0"
+                            , Html.Attributes.style "min-height" "100vh"
+                            ]
+                            [ Html.div
+                                [ Html.Attributes.style "width" "375px"
+                                , Html.Attributes.style "border" "2px solid #333"
+                                , Html.Attributes.style "border-radius" "8px"
+                                , Html.Attributes.style "overflow" "hidden"
+                                , Html.Attributes.style "background-color" "white"
+                                , Html.Attributes.style "box-shadow" "0 4px 6px rgba(0,0,0,0.1)"
+                                ]
+                                (renderClient client1Id "Client 0")
+                            , Html.div
+                                [ Html.Attributes.style "width" "375px"
+                                , Html.Attributes.style "border" "2px solid #666"
+                                , Html.Attributes.style "border-radius" "8px"
+                                , Html.Attributes.style "overflow" "hidden"
+                                , Html.Attributes.style "background-color" "white"
+                                , Html.Attributes.style "box-shadow" "0 4px 6px rgba(0,0,0,0.1)"
+                                ]
+                                (renderClient client2Id "Client 1")
+                            ]
+                       ]
                     ++ (case currentStep.eventType of
                             UserInputEvent { inputType } ->
                                 let
