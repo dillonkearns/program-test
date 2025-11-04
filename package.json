@@ -1,7 +1,7 @@
 {
   "name": "program-test",
   "scripts": {
-    "test": "cd example/counter && elm-test --compiler `which lamdera`"
+    "test": "elm-test --compiler `which lamdera`"
   },
   "devDependencies": {
     "elm-format": "^0.8.8",
