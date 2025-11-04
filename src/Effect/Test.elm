@@ -52,6 +52,7 @@ If you want to just run the end to end tests to make sure they work, or automati
 -}
 
 import Array exposing (Array)
+import AssertionParser
 import Base64
 import Browser exposing (UrlRequest(..))
 import Browser.Dom
@@ -685,17 +686,35 @@ checkView clientId delay query =
                     (\state ->
                         case SeqDict.get clientId state.frontends of
                             Just frontend ->
-                                case
-                                    state.frontendApp.view frontend.model
-                                        |> .body
-                                        |> Html.div []
-                                        |> Test.Html.Query.fromHtml
-                                        |> query
-                                        |> Test.Runner.getFailureReason
-                                of
+                                let
+                                    queryResult =
+                                        state.frontendApp.view frontend.model
+                                            |> .body
+                                            |> Html.div []
+                                            |> Test.Html.Query.fromHtml
+                                            |> query
+                                            |> Test.Runner.getFailureReason
+
+                                    -- Try to extract assertion info from the query by running it and seeing what it checks
+                                    assertionHint =
+                                        case queryResult of
+                                            Just { description } ->
+                                                -- Test failed, extract from error description
+                                                AssertionParser.fromDescription description
+
+                                            Nothing ->
+                                                -- Test passed! Force a failure to see what it was checking
+                                                -- Run the same query on empty HTML to get the description
+                                                Html.text ""
+                                                    |> Test.Html.Query.fromHtml
+                                                    |> query
+                                                    |> Test.Runner.getFailureReason
+                                                    |> Maybe.andThen (\failure -> AssertionParser.fromDescription failure.description)
+                                in
+                                case queryResult of
                                     Just { description } ->
                                         addEvent
-                                            (CheckStateEvent { checkType = CheckFrontendView clientId })
+                                            (CheckStateEvent { checkType = CheckFrontendView clientId assertionHint })
                                             ((case String.split "▼ " description |> List.reverse |> List.head of
                                                 Just error ->
                                                     "The following view check failed: " ++ error
@@ -710,13 +729,67 @@ checkView clientId delay query =
 
                                     Nothing ->
                                         addEvent
-                                            (CheckStateEvent { checkType = CheckFrontendView clientId })
+                                            (CheckStateEvent { checkType = CheckFrontendView clientId assertionHint })
                                             Nothing
                                             state
 
                             Nothing ->
                                 addEvent
-                                    (CheckStateEvent { checkType = CheckFrontendView clientId })
+                                    (CheckStateEvent { checkType = CheckFrontendView clientId Nothing })
+                                    (Just (ClientIdNotFound clientId))
+                                    state
+                    )
+        )
+
+
+{-| Same as checkView but with a descriptive label that will be shown in the test timeline
+-}
+checkViewWithLabel :
+    ClientId
+    -> DelayInMs
+    -> String
+    -> (Test.Html.Query.Single frontendMsg -> Expectation)
+    -> Action toBackend frontendMsg frontendModel toFrontend backendMsg backendModel
+checkViewWithLabel clientId delay label query =
+    Action
+        (\instructions ->
+            wait (Duration.milliseconds delay) instructions
+                |> NextStep
+                    (\state ->
+                        case SeqDict.get clientId state.frontends of
+                            Just frontend ->
+                                case
+                                    state.frontendApp.view frontend.model
+                                        |> .body
+                                        |> Html.div []
+                                        |> Test.Html.Query.fromHtml
+                                        |> query
+                                        |> Test.Runner.getFailureReason
+                                of
+                                    Just { description } ->
+                                        addEvent
+                                            (CheckStateEvent { checkType = CheckFrontendView clientId (Just (AssertionParser.CustomLabel label)) })
+                                            ((case String.split "▼ " description |> List.reverse |> List.head of
+                                                Just error ->
+                                                    "The following view check failed: " ++ error
+
+                                                Nothing ->
+                                                    ""
+                                             )
+                                                |> ViewTestError
+                                                |> Just
+                                            )
+                                            state
+
+                                    Nothing ->
+                                        addEvent
+                                            (CheckStateEvent { checkType = CheckFrontendView clientId (Just (AssertionParser.CustomLabel label)) })
+                                            Nothing
+                                            state
+
+                            Nothing ->
+                                addEvent
+                                    (CheckStateEvent { checkType = CheckFrontendView clientId (Just (AssertionParser.CustomLabel label)) })
                                     (Just (ClientIdNotFound clientId))
                                     state
                     )
@@ -1165,6 +1238,11 @@ type alias FrontendActions toBackend frontendMsg frontendModel toFrontend backen
         DelayInMs
         -> (Test.Html.Query.Single frontendMsg -> Expectation)
         -> Action toBackend frontendMsg frontendModel toFrontend backendMsg backendModel
+    , checkViewWithLabel :
+        DelayInMs
+        -> String
+        -> (Test.Html.Query.Single frontendMsg -> Expectation)
+        -> Action toBackend frontendMsg frontendModel toFrontend backendMsg backendModel
     , update :
         DelayInMs
         -> frontendMsg
@@ -1568,6 +1646,7 @@ connectFrontend delay sessionId url windowSize andThenFunc =
                                     , clickLink = clickLink clientId
                                     , resizeWindow = resizeWindow clientId
                                     , checkView = checkView clientId
+                                    , checkViewWithLabel = checkViewWithLabel clientId
                                     , update = frontendUpdate clientId
                                     , sendToBackend = sendToBackend clientId
                                     , snapshotView = snapshotView clientId
@@ -1672,7 +1751,7 @@ type UserInputType
 
 {-| -}
 type CheckType
-    = CheckFrontendView ClientId
+    = CheckFrontendView ClientId (Maybe AssertionParser.Assertion)
     | CheckFrontendState ClientId
     | CheckState
     | CheckBackend
@@ -4844,7 +4923,7 @@ eventTypeToTimelineType eventType =
 
         CheckStateEvent { checkType } ->
             case checkType of
-                CheckFrontendView clientId ->
+                CheckFrontendView clientId _ ->
                     FrontendTimeline clientId
 
                 CheckFrontendState clientId ->
@@ -5599,8 +5678,13 @@ currentStepText currentStep testView_ =
 
                 CheckStateEvent { checkType } ->
                     case checkType of
-                        CheckFrontendView _ ->
-                            "Check frontend view"
+                        CheckFrontendView _ maybeAssertion ->
+                            case maybeAssertion of
+                                Just assertion ->
+                                    "Check: " ++ AssertionParser.toString assertion
+
+                                Nothing ->
+                                    "Check frontend view"
 
                         CheckFrontendState _ ->
                             "Check frontend state"
